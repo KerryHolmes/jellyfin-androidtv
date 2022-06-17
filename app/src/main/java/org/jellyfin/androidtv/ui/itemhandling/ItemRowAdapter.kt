@@ -6,7 +6,6 @@ import androidx.leanback.widget.HeaderItem
 import androidx.leanback.widget.ListRow
 import androidx.leanback.widget.Presenter
 import androidx.leanback.widget.PresenterSelector
-import kotlinx.coroutines.CoroutineScope
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.UserRepository
 import org.jellyfin.androidtv.constant.ChangeTriggerType
@@ -15,6 +14,7 @@ import org.jellyfin.androidtv.constant.QueryType
 import org.jellyfin.androidtv.data.model.ChapterItemInfo
 import org.jellyfin.androidtv.data.model.DataRefreshService
 import org.jellyfin.androidtv.data.model.FilterOptions
+import org.jellyfin.androidtv.data.querying.ContinueWatchingQuery
 import org.jellyfin.androidtv.data.querying.SpecialsQuery
 import org.jellyfin.androidtv.data.querying.StdItemQuery
 import org.jellyfin.androidtv.data.querying.TrailersQuery
@@ -34,6 +34,7 @@ import org.jellyfin.apiclient.interaction.Response
 import org.jellyfin.apiclient.model.dto.BaseItemDto
 import org.jellyfin.apiclient.model.dto.BaseItemPerson
 import org.jellyfin.apiclient.model.dto.BaseItemType
+import org.jellyfin.apiclient.model.dto.UserItemDataDto
 import org.jellyfin.apiclient.model.livetv.LiveTvChannelQuery
 import org.jellyfin.apiclient.model.livetv.RecommendedProgramQuery
 import org.jellyfin.apiclient.model.livetv.RecordingGroupQuery
@@ -53,19 +54,14 @@ import org.jellyfin.apiclient.model.results.ChannelInfoDtoResult
 import org.jellyfin.apiclient.model.results.SeriesTimerInfoDtoResult
 import org.jellyfin.apiclient.model.search.SearchHintResult
 import org.jellyfin.apiclient.model.search.SearchQuery
-import org.jellyfin.sdk.api.operations.ItemsApi
-import org.jellyfin.sdk.model.api.BaseItemDtoQueryResult
+import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.model.api.ItemFields
 import org.koin.java.KoinJavaComponent.get
 import org.koin.java.KoinJavaComponent.inject
 import timber.log.Timber
 import java.util.Calendar
-import java.util.Collections
 import java.util.GregorianCalendar
-import java.util.Objects
 import java.util.TimeZone
-import java.util.UUID
-import kotlin.coroutines.Continuation
 
 class ItemRowAdapter : ArrayObjectAdapter {
     private var mQuery: ItemQuery? = null
@@ -82,7 +78,8 @@ class ItemRowAdapter : ArrayObjectAdapter {
     private var mTvRecordingQuery: RecordingQuery? = null
     private var mTvRecordingGroupQuery: RecordingGroupQuery? = null
     private var mArtistsQuery: ArtistsQuery? = null
-    private var mLatestQuery: LatestItemsQuery? = null
+	private var mLatestQuery: LatestItemsQuery? = null
+	private var mContinueWatchingQuery: ContinueWatchingQuery? = null
     private var mSeriesTimerQuery: SeriesTimerQuery? = null
     var queryType: QueryType? = null
         private set
@@ -107,7 +104,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         get() {
             synchronized(currentlyRetrievingSemaphore) { return field }
         }
-        protected set(currentlyRetrieving) {
+        private set(currentlyRetrieving) {
             synchronized(currentlyRetrievingSemaphore) { field = currentlyRetrieving }
         }
     var preferParentThumb = false
@@ -115,7 +112,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     var isStaticHeight = false
         private set
     private val apiClient = inject<ApiClient>(ApiClient::class.java)
-    private val itemsApiClient = inject<ItemsApi>(ItemsApi::class.java)
+	private val api by inject<org.jellyfin.sdk.api.client.ApiClient>(org.jellyfin.sdk.api.client.ApiClient::class.java)
     private val userViewsRepository = inject<UserViewsRepository>(UserViewsRepository::class.java)
     private var context: Context? = null
     fun setRow(row: ListRow?) {
@@ -133,7 +130,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         this.context = context
         this.parent = parent
         mQuery = query
-        mQuery!!.userId = get<UserRepository>(UserRepository::class.java).currentUser.value!!.id.toString()
+        mQuery?.userId = get<UserRepository>(UserRepository::class.java).currentUser.value!!.id.toString()
         this.chunkSize = chunkSize
         this.preferParentThumb = preferParentThumb
         isStaticHeight = staticHeight
@@ -180,7 +177,16 @@ class ItemRowAdapter : ArrayObjectAdapter {
         isStaticHeight = true
     }
 
-    constructor(context: Context?, query: SeriesTimerQuery?, presenter: Presenter?, parent: ArrayObjectAdapter?) : super(presenter) {
+	constructor(context: Context?, query: ContinueWatchingQuery?, preferParentThumb: Boolean, presenter: Presenter?, parent: ArrayObjectAdapter?) : super(presenter) {
+		this.context = context
+		this.parent = parent
+		mContinueWatchingQuery = query
+		queryType = QueryType.ContinueWatching
+		this.preferParentThumb = preferParentThumb
+		isStaticHeight = true
+	}
+
+	constructor(context: Context?, query: SeriesTimerQuery?, presenter: Presenter?, parent: ArrayObjectAdapter?) : super(presenter) {
         this.context = context
         this.parent = parent
         mSeriesTimerQuery = query
@@ -528,8 +534,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
             QueryType.AudioPlaylists -> retrieveAudioPlaylists(mQuery)
             QueryType.Premieres -> retrievePremieres(mQuery)
             QueryType.SeriesTimer -> retrieve(mSeriesTimerQuery)
-			QueryType.ContinueWatching -> retrieveContinue(mQuery)
-			else -> {}
+			QueryType.ContinueWatching -> retrieveContinue(mContinueWatchingQuery)
+			else -> {
+				Timber.i(message = "Query Type Not Recognized falling back to generic Items Query")
+				retrieve(mQuery)
+			}
 		}
     }
 
@@ -621,7 +630,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetSearchHintsAsync(query, object : Response<SearchHintResult>() {
             override fun onResponse(response: SearchHintResult) {
-                if (response.searchHints != null && response.searchHints.size > 0) {
+                if (response.searchHints != null && response.searchHints.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -654,7 +663,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     private fun retrieve(query: ItemQuery?) {
         apiClient.value.GetItemsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     totalItems = if (query!!.enableTotalRecordCount) response.totalRecordCount else response.items.size
                     var i = getItemsLoaded()
                     val prevItems = if (i == 0 && size() > 0) size() else 0
@@ -697,7 +706,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     private fun retrieve(query: ArtistsQuery?) {
         apiClient.value.GetAlbumArtistsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     totalItems = response.totalRecordCount
                     var i = getItemsLoaded()
                     val prevItems = if (i == 0 && size() > 0) size() else 0
@@ -725,7 +734,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     private fun retrieve(query: LatestItemsQuery?) {
         apiClient.value.GetLatestItems(query, object : Response<Array<BaseItemDto?>?>() {
             override fun onResponse(response: Array<BaseItemDto?>?) {
-                if (response != null && response.size > 0) {
+                if (response != null && response.isNotEmpty()) {
                     totalItems = response.size
                     var i = getItemsLoaded()
                     val prevItems = if (i == 0 && size() > 0) size() else 0
@@ -750,48 +759,153 @@ class ItemRowAdapter : ArrayObjectAdapter {
         })
     }
 
-    private fun retrieveContinue(query: ItemQuery?) {
-//        val (response) = runBlocking<BaseItemDtoQueryResult> { coroutineScope: CoroutineScope?, continuation: Continuation<BaseItemDtoQueryResult?>? ->
-//            itemsApiClient.value.getResumeItems(
-//                    Objects.requireNonNull(UUID.fromString(query.userId)),
-//                    null,
-//                    query.limit,
-//                    null,
-//                    null,
-//                    Collections.EMPTY_LIST as Collection<ItemFields?>,
-//                    Collections.EMPTY_LIST,
-//                    null,
-//                    null,
-//                    Collections.EMPTY_LIST,
-//                    Collections.EMPTY_LIST,
-//                    null,
-//                    true,
-//                    true,
-//                    false,
-//                    continuation as Continuation<org.jellyfin.sdk.api.client.Response<BaseItemDtoQueryResult?>?>?
-//            )
-//        }
-//        if (response != null && response.size > 0) {
-//            totalItems = response.size
-//            var i = getItemsLoaded()
-//            val prevItems = if (i == 0 && size() > 0) size() else 0
-//            for (item in response) {
-//                add(BaseRowItem(i++, item as BaseItemDto, preferParentThumb, isStaticHeight))
-//            }
-//            setItemsLoaded(i)
-//            if (i == 0) {
-//                removeRow()
-//            } else if (prevItems > 0) {
-//                // remove previous items as we re-retrieved
-//                // this is done this way instead of clearing the adapter to avoid bugs in the framework elements
-//                removeItems(0, prevItems)
-//            }
-//        } else {
-//            // no results - don't show us
-//            totalItems = 0
-//            removeRow()
-//        }
-//        notifyRetrieveFinished()
+    private fun retrieveContinue(query: ContinueWatchingQuery?) {
+		runBlocking {
+			val response = api.itemsApi.getResumeItems(
+					fields = listOf(ItemFields.PRIMARY_IMAGE_ASPECT_RATIO,
+							ItemFields.OVERVIEW,
+							ItemFields.ITEM_COUNTS,
+							ItemFields.DISPLAY_PREFERENCES_ID,
+							ItemFields.CHILD_COUNT),
+					imageTypeLimit = 1,
+					limit = 10,
+					mediaTypes = query?.mediaTypes,
+					excludeActiveSessions = true,
+			).content.items.orEmpty()
+			if (response.isNotEmpty()) {
+				totalItems = response.size
+				var i = getItemsLoaded()
+				val prevItems = if (i == 0 && size() > 0) size() else 0
+				for (item in response) {
+					val userData = UserItemDataDto()
+					userData.playedPercentage = item.userData?.playedPercentage
+					userData.playbackPositionTicks = item.userData?.playbackPositionTicks ?: 0
+					userData.playCount = item.userData?.playCount ?: 0
+					userData.isFavorite = item.userData?.isFavorite ?: false
+					userData.played = item.userData?.played ?: false
+					userData.key = item.userData?.key
+
+					val result = BaseItemDto()
+					result.baseItemType = valueOf<BaseItemType>(item.type.toString(), BaseItemType.Movie)
+
+					result.name = item.name
+					result.serverId = item.serverId
+					result.id = item.id.toString()
+					result.container = item.container
+					result.hasSubtitles = item.hasSubtitles
+					result.communityRating = item.communityRating
+					result.userData = userData
+					result.originalTitle = item.originalTitle
+					result.sourceType = item.sourceType
+					result.playlistItemId = item.playlistItemId
+					result.airsBeforeSeasonNumber = item.airsBeforeSeasonNumber
+					result.airsAfterSeasonNumber = item.airsAfterSeasonNumber
+					result.airsBeforeEpisodeNumber = item.airsBeforeEpisodeNumber
+					result.canDelete = item.canDelete
+					result.canDownload = item.canDownload
+					result.preferredMetadataLanguage = item.preferredMetadataLanguage
+					result.preferredMetadataCountryCode = item.preferredMetadataCountryCode
+					result.sortName = item.sortName
+					result.forcedSortName = item.forcedSortName
+					result.criticRating = item.criticRating
+					result.path = item.path
+					result.officialRating = item.officialRating
+					result.customRating = item.customRating
+					result.channelName = item.channelName
+					result.overview = item.overview
+					result.shortOverview = item.overview
+					result.cumulativeRunTimeTicks = item.cumulativeRunTimeTicks
+					result.runTimeTicks = item.runTimeTicks
+					result.aspectRatio = item.aspectRatio
+					result.productionYear = item.productionYear
+					result.isPlaceHolder = item.isPlaceHolder
+					result.number = item.number
+					result.channelNumber = item.channelNumber
+					result.indexNumber = item.indexNumber
+					result.indexNumberEnd = item.indexNumberEnd
+					result.parentIndexNumber = item.parentIndexNumber
+					result.isFolder = item.isFolder
+					result.localTrailerCount = item.localTrailerCount
+					result.recursiveItemCount = item.recursiveItemCount
+					result.childCount = item.childCount
+					result.seriesName = item.seriesName
+					result.specialFeatureCount = item.specialFeatureCount
+					result.displayPreferencesId = item.displayPreferencesId
+					result.status = item.status
+					result.airTime = item.airTime
+					result.primaryImageAspectRatio = item.primaryImageAspectRatio
+					result.album = item.album
+					result.collectionType = item.collectionType
+					result.displayOrder = item.displayOrder
+					result.albumPrimaryImageTag = item.albumPrimaryImageTag
+					result.seriesPrimaryImageTag = item.seriesPrimaryImageTag
+					result.albumArtist = item.albumArtist
+					result.seasonName = item.seasonName
+					result.partCount = item.partCount
+					result.mediaSourceCount = item.mediaSourceCount
+					result.parentLogoImageTag = item.parentLogoImageTag
+					result.parentArtImageTag = item.parentArtImageTag
+					result.seriesThumbImageTag = item.seriesThumbImageTag
+					result.seriesStudio = item.seriesStudio
+					result.parentThumbImageTag = item.parentThumbImageTag
+					result.parentPrimaryImageItemId = item.parentPrimaryImageItemId
+					result.parentPrimaryImageTag = item.parentPrimaryImageTag
+					result.mediaType = item.mediaType
+					result.trailerCount = item.trailerCount
+					result.movieCount = item.movieCount
+					result.seriesCount = item.seriesCount
+					result.programCount = item.programCount
+					result.episodeCount = item.episodeCount
+					result.songCount = item.songCount
+					result.albumCount = item.albumCount
+					result.artistCount = item.artistCount
+					result.musicVideoCount = item.musicVideoCount
+					result.lockData = item.lockData
+					result.width = item.width
+					result.height = item.height
+					result.cameraMake = item.cameraMake
+					result.cameraModel = item.cameraModel
+					result.software = item.software
+					result.exposureTime = item.exposureTime
+					result.focalLength = item.focalLength
+					result.aperture = item.aperture
+					result.shutterSpeed = item.shutterSpeed
+					result.latitude = item.latitude
+					result.longitude = item.longitude
+					result.altitude = item.altitude
+					result.isoSpeedRating = item.isoSpeedRating
+					result.seriesTimerId = item.seriesTimerId
+					result.programId = item.programId
+					result.channelPrimaryImageTag = item.channelPrimaryImageTag
+					result.completionPercentage = item.completionPercentage
+					result.isRepeat = item.isRepeat
+					result.episodeTitle = item.episodeTitle
+					result.isMovie = item.isMovie
+					result.isSports = item.isSports
+					result.isSeries = item.isSeries
+					result.isLive = item.isLive
+					result.isNews = item.isNews
+					result.isKids = item.isKids
+					result.isPremiere = item.isPremiere
+					result.timerId = item.timerId
+
+					add(BaseRowItem(i++, result, preferParentThumb, isStaticHeight))
+				}
+				setItemsLoaded(i)
+				if (i == 0) {
+					removeRow()
+				} else if (prevItems > 0) {
+					// remove previous items as we re-retrieved
+					// this is done this way instead of clearing the adapter to avoid bugs in the framework elements
+					removeItems(0, prevItems)
+				}
+			} else {
+				// no results - don't show us
+				totalItems = 0
+				removeRow()
+			}
+			notifyRetrieveFinished()
+		}
     }
 
     private fun retrievePremieres(query: ItemQuery?) {
@@ -808,7 +922,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
                         if (adapter.size() > 0) {
                             adapter.clear()
                         }
-                        if (response.items != null && response.items.size > 0) {
+                        if (response.items != null && response.items.isNotEmpty()) {
                             var i = 0
                             val compare = Calendar.getInstance()
                             compare.add(Calendar.MONTH, -2)
@@ -864,7 +978,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetNextUpEpisodesAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     if (adapter.size() > 0) {
                         adapter.clear()
                     }
@@ -926,7 +1040,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetLiveTvChannelsAsync(query, object : Response<ChannelInfoDtoResult>() {
             override fun onResponse(response: ChannelInfoDtoResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = itemsLoaded
                     if (i == 0 && adapter.size() > 0) {
                         adapter.clear()
@@ -960,7 +1074,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         apiClient.value.GetRecommendedLiveTvProgramsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
                 TvManager.updateProgramsNeedsLoadTime()
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     val prevItems = if (adapter.size() > 0) adapter.size() else 0
                     for (item in response.items) {
@@ -995,7 +1109,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetLiveTvRecordingGroupsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     val prevItems = if (adapter.size() > 0) adapter.size() else 0
                     for (item in response.items) {
@@ -1032,7 +1146,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetLiveTvSeriesTimersAsync(query, object : Response<SeriesTimerInfoDtoResult>() {
             override fun onResponse(response: SeriesTimerInfoDtoResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     val prevItems = if (adapter.size() > 0) adapter.size() else 0
                     for (item in response.items) {
@@ -1067,7 +1181,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetLiveTvRecordingsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     val prevItems = if (adapter.size() > 0) adapter.size() else 0
                     if (adapter.chunkSize == 0) {
@@ -1115,7 +1229,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetSpecialFeaturesAsync(get<UserRepository>(UserRepository::class.java).currentUser.value!!.id.toString(), query!!.itemId, object : Response<Array<BaseItemDto?>>() {
             override fun onResponse(response: Array<BaseItemDto?>) {
-                if (response.size > 0) {
+                if (response.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -1147,7 +1261,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetLocalTrailersAsync(get<UserRepository>(UserRepository::class.java).currentUser.value!!.id.toString(), query!!.itemId, object : Response<Array<BaseItemDto>>() {
             override fun onResponse(response: Array<BaseItemDto>) {
-                if (response.size > 0) {
+                if (response.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -1180,7 +1294,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetSimilarItems(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -1212,7 +1326,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetSimilarItems(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -1244,7 +1358,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetUpcomingEpisodesAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     if (adapter.size() > 0) {
                         adapter.clear()
@@ -1278,7 +1392,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetPeopleAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = itemsLoaded
                     if (i == 0 && adapter.size() > 0) {
                         adapter.clear()
@@ -1310,7 +1424,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         val adapter = this
         apiClient.value.GetSeasonsAsync(query, object : Response<ItemsResult>() {
             override fun onResponse(response: ItemsResult) {
-                if (response.items != null && response.items.size > 0) {
+                if (response.items != null && response.items.isNotEmpty()) {
                     var i = 0
                     val prevItems = if (adapter.size() > 0) adapter.size() else 0
                     for (item in response.items) {
@@ -1337,7 +1451,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         })
     }
 
-    protected fun notifyRetrieveFinished(exception: Exception? = null) {
+    private fun notifyRetrieveFinished(exception: Exception? = null) {
         isCurrentlyRetrieving = false
         if (mRetrieveFinishedListener != null) {
             if (exception == null) mRetrieveFinishedListener!!.onResponse() else mRetrieveFinishedListener!!.onError(exception)
@@ -1351,4 +1465,12 @@ class ItemRowAdapter : ArrayObjectAdapter {
     protected fun notifyRetrieveStarted() {
         isCurrentlyRetrieving = true
     }
+
+	inline fun <reified T : Enum<T>> valueOf(type: String, default: T): T {
+		return try {
+			java.lang.Enum.valueOf(T::class.java, type)
+		} catch (e: Exception) {
+			default
+		}
+	}
 }

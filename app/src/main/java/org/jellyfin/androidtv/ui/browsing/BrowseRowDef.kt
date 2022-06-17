@@ -15,10 +15,11 @@ import org.jellyfin.apiclient.model.querying.ArtistsQuery
 import org.jellyfin.apiclient.model.querying.SeasonQuery
 import org.jellyfin.androidtv.constant.QueryType
 import org.jellyfin.androidtv.constant.ChangeTriggerType
+import org.jellyfin.androidtv.data.querying.ContinueWatchingQuery
 import org.jellyfin.androidtv.data.querying.ViewQuery
 
 class BrowseRowDef {
-    var headerText: String? = null
+	var headerText: String? = null
     var query: ItemQuery? = null
         private set
     var nextUpQuery: NextUpQuery? = null
@@ -45,7 +46,9 @@ class BrowseRowDef {
         private set
     var seasonQuery: SeasonQuery? = null
         private set
-    var queryType: QueryType? = null
+	var continueWatchingQuery: ContinueWatchingQuery? = null
+		private set
+	var queryType: QueryType? = null
         private set
     var chunkSize = 0
         private set
@@ -92,6 +95,13 @@ class BrowseRowDef {
         nextUpQuery = query
         queryType = QueryType.NextUp
     }
+
+	constructor(header: String?, query: ContinueWatchingQuery?) {
+		headerText = header
+		continueWatchingQuery = query
+		queryType = QueryType.ContinueWatching
+		this.changeTriggers = arrayOf(ChangeTriggerType.VideoQueueChange, ChangeTriggerType.TvPlayback, ChangeTriggerType.MoviePlayback)
+	}
 
     constructor(header: String?, query: SeriesTimerQuery?) {
         headerText = header

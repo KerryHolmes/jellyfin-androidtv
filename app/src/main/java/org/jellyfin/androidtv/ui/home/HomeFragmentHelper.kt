@@ -4,16 +4,13 @@ import android.content.Context
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.UserRepository
 import org.jellyfin.androidtv.constant.ChangeTriggerType
-import org.jellyfin.androidtv.data.querying.StdItemQuery
+import org.jellyfin.androidtv.data.querying.ContinueWatchingQuery
 import org.jellyfin.androidtv.data.querying.ViewQuery
 import org.jellyfin.androidtv.ui.browsing.BrowseRowDef
-import org.jellyfin.apiclient.model.entities.LocationType
 import org.jellyfin.apiclient.model.entities.MediaType
 import org.jellyfin.apiclient.model.livetv.RecommendedProgramQuery
 import org.jellyfin.apiclient.model.livetv.RecordingQuery
 import org.jellyfin.apiclient.model.querying.ItemFields
-import org.jellyfin.apiclient.model.querying.ItemFilter
-import org.jellyfin.apiclient.model.querying.ItemSortBy
 import org.jellyfin.apiclient.model.querying.ItemsResult
 import org.jellyfin.apiclient.model.querying.NextUpQuery
 
@@ -30,29 +27,20 @@ class HomeFragmentHelper(
 		return HomeFragmentBrowseRowDefRow(BrowseRowDef(context.getString(R.string.lbl_my_media), query))
 	}
 
-	fun loadResume(title: String, includeMediaTypes: Array<String>): HomeFragmentRow {
-		val query = StdItemQuery().apply {
+	fun loadResume(title: String, includeMediaTypes: Collection<String>): HomeFragmentRow {
+		val query = ContinueWatchingQuery().apply {
 			mediaTypes = includeMediaTypes
-			recursive = true
-			imageTypeLimit = 1
-			enableTotalRecordCount = false
-			collapseBoxSetItems = false
-			excludeLocationTypes = arrayOf(LocationType.Virtual)
-			limit = ITEM_LIMIT_RESUME
-			filters = arrayOf(ItemFilter.IsResumable)
-			sortBy = arrayOf(ItemSortBy.DatePlayed)
-			sortOrder = org.jellyfin.apiclient.model.entities.SortOrder.Descending
 		}
 
-		return HomeFragmentBrowseRowDefRow(BrowseRowDef(title, query, 0, false, true, arrayOf(ChangeTriggerType.VideoQueueChange, ChangeTriggerType.TvPlayback, ChangeTriggerType.MoviePlayback)))
+		return HomeFragmentBrowseRowDefRow(BrowseRowDef(title, query))
 	}
 
 	fun loadResumeVideo(): HomeFragmentRow {
-		return loadResume(context.getString(R.string.lbl_continue_watching), arrayOf(MediaType.Video))
+		return loadResume(context.getString(R.string.lbl_continue_watching), listOf(MediaType.Video))
 	}
 
 	fun loadResumeAudio(): HomeFragmentRow {
-		return loadResume(context.getString(R.string.lbl_continue_watching), arrayOf(MediaType.Audio))
+		return loadResume(context.getString(R.string.lbl_continue_watching), listOf(MediaType.Audio))
 	}
 
 	fun loadLatestLiveTvRecordings(): HomeFragmentRow {
@@ -106,7 +94,6 @@ class HomeFragmentHelper(
 
 	companion object {
 		// Maximum amount of items loaded for a row
-		private const val ITEM_LIMIT_RESUME = 50
 		private const val ITEM_LIMIT_RECORDINGS = 40
 		private const val ITEM_LIMIT_NEXT_UP = 50
 		private const val ITEM_LIMIT_ON_NOW = 20
