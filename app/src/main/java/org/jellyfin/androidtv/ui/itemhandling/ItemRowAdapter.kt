@@ -6,6 +6,9 @@ import androidx.leanback.widget.HeaderItem
 import androidx.leanback.widget.ListRow
 import androidx.leanback.widget.Presenter
 import androidx.leanback.widget.PresenterSelector
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import org.jellyfin.androidtv.R
 import org.jellyfin.androidtv.auth.repository.UserRepository
 import org.jellyfin.androidtv.constant.ChangeTriggerType
@@ -760,7 +763,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     }
 
     private fun retrieveContinue(query: ContinueWatchingQuery?) {
-		runBlocking {
+		ProcessLifecycleOwner.get().lifecycleScope.launch {
 			val response = api.itemsApi.getResumeItems(
 					fields = listOf(ItemFields.PRIMARY_IMAGE_ASPECT_RATIO,
 							ItemFields.OVERVIEW,
