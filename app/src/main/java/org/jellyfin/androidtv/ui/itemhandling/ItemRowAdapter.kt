@@ -30,7 +30,6 @@ import org.jellyfin.androidtv.ui.livetv.TvManager
 import org.jellyfin.androidtv.ui.presentation.PositionableListRowPresenter
 import org.jellyfin.androidtv.ui.presentation.TextItemPresenter
 import org.jellyfin.androidtv.util.Utils
-import org.jellyfin.androidtv.util.runBlocking
 import org.jellyfin.apiclient.interaction.ApiClient
 import org.jellyfin.apiclient.interaction.EmptyResponse
 import org.jellyfin.apiclient.interaction.Response
@@ -103,7 +102,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
     var totalItems = 0
     private var fullyLoaded = false
     private val currentlyRetrievingSemaphore = Any()
-    var isCurrentlyRetrieving = false
+    private var isCurrentlyRetrieving = false
         get() {
             synchronized(currentlyRetrievingSemaphore) { return field }
         }
@@ -126,9 +125,9 @@ class ItemRowAdapter : ArrayObjectAdapter {
         this.reRetrieveTriggers = reRetrieveTriggers
     }
 
-    constructor(context: Context?, query: ItemQuery?, chunkSize: Int, preferParentThumb: Boolean, presenter: Presenter?, parent: ArrayObjectAdapter?) : this(context, query, chunkSize, preferParentThumb, false, presenter, parent) {}
+    constructor(context: Context?, query: ItemQuery?, chunkSize: Int, preferParentThumb: Boolean, presenter: Presenter?, parent: ArrayObjectAdapter?) : this(context, query, chunkSize, preferParentThumb, false, presenter, parent)
 
-    @JvmOverloads
+	@JvmOverloads
     constructor(context: Context?, query: ItemQuery?, chunkSize: Int, preferParentThumb: Boolean, staticHeight: Boolean, presenter: Presenter?, parent: ArrayObjectAdapter?, queryType: QueryType? = QueryType.Items) : super(presenter) {
         this.context = context
         this.parent = parent
@@ -771,7 +770,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
 							ItemFields.DISPLAY_PREFERENCES_ID,
 							ItemFields.CHILD_COUNT),
 					imageTypeLimit = 1,
-					limit = 10,
+					limit = 50,
 					mediaTypes = query?.mediaTypes,
 					excludeActiveSessions = true,
 			).content.items.orEmpty()
@@ -1465,11 +1464,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
         mRetrieveFinishedListener = response
     }
 
-    protected fun notifyRetrieveStarted() {
+    private fun notifyRetrieveStarted() {
         isCurrentlyRetrieving = true
     }
 
-	inline fun <reified T : Enum<T>> valueOf(type: String, default: T): T {
+	private inline fun <reified T : Enum<T>> valueOf(type: String, default: T): T {
 		return try {
 			java.lang.Enum.valueOf(T::class.java, type)
 		} catch (e: Exception) {
