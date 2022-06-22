@@ -433,6 +433,7 @@ class ItemRowAdapter : ArrayObjectAdapter {
         if (fullyLoaded || isCurrentlyRetrieving) {
             return
         }
+		var savedIdx: Int? = null;
         when (queryType) {
             QueryType.Persons -> {
                 if (mPersonsQuery == null) {
@@ -440,9 +441,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
                 }
                 notifyRetrieveStarted()
 
+				savedIdx = mPersonsQuery!!.startIndex;
                 //set the query to go get the next chunk
                 mPersonsQuery!!.startIndex = itemsLoaded
                 retrieve(mPersonsQuery)
+				mPersonsQuery!!.startIndex = savedIdx;
             }
             QueryType.LiveTvChannel -> {
                 if (mTvChannelQuery == null) {
@@ -450,9 +453,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
                 }
                 notifyRetrieveStarted()
 
+				savedIdx = mTvChannelQuery!!.startIndex
                 //set the query to go get the next chunk
                 mTvChannelQuery!!.startIndex = itemsLoaded
                 retrieve(mTvChannelQuery)
+				mTvChannelQuery!!.startIndex = savedIdx
             }
             QueryType.AlbumArtists -> {
                 if (mArtistsQuery == null) {
@@ -460,9 +465,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
                 }
                 notifyRetrieveStarted()
 
+				savedIdx = mArtistsQuery!!.startIndex
                 //set the query to go get the next chunk
                 mArtistsQuery!!.startIndex = itemsLoaded
                 retrieve(mArtistsQuery)
+				mArtistsQuery!!.startIndex = savedIdx
             }
             else -> {
                 if (mQuery == null) {
@@ -470,9 +477,11 @@ class ItemRowAdapter : ArrayObjectAdapter {
                 }
                 notifyRetrieveStarted()
 
+				savedIdx = mQuery!!.startIndex
                 //set the query to go get the next chunk
                 mQuery!!.startIndex = itemsLoaded
                 retrieve(mQuery)
+				mQuery!!.startIndex = savedIdx
             }
         }
     }
